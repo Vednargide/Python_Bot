@@ -1,5 +1,5 @@
 python-telegram-bot==20.5
-google-generativeai
+google-genai
 huggingface_hub
 python-dotenv
 Pillow

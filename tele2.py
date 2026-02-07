@@ -2,7 +2,9 @@ import os
 import logging
 import re
 import asyncio
-import google.generativeai as genai
+import time
+from collections import defaultdict
+import google.genai as genai
 from huggingface_hub import InferenceClient
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -26,7 +28,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
 
 genai.configure(api_key=GEMINI_API_KEY)
-gemini_model = genai.GenerativeModel('gemini-2.5-pro')
+gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 hf_client = InferenceClient(token=HUGGINGFACE_API_KEY)
 
 class PatternRecognitionHandler:
@@ -173,6 +175,11 @@ class AIBot:
             'max_output_tokens': 4096,
         }
         self.is_active = True
+        # Add request throttling and caching
+        self.request_cache = {}  # Cache for responses
+        self.last_request_time = defaultdict(float)  # Track request times per user
+        self.quota_exceeded_until = 0  # Track when quota will reset
+        self.min_request_interval = 2  # Minimum seconds between requests
         
     async def should_respond(self, chat_id, message_text):
         if not message_text or message_text.startswith('/'):
@@ -212,19 +219,73 @@ class AIBot:
 
     async def get_gemini_response(self, prompt):
         try:
+            # Check cache first
+            cache_key = str(prompt)[:100]  # Use first 100 chars as key
+            if cache_key in self.request_cache:
+                logger.info("Using cached response")
+                return self.request_cache[cache_key]
+            
+            # Check if quota exceeded and wait
+            current_time = time.time()
+            if current_time < self.quota_exceeded_until:
+                wait_time = int(self.quota_exceeded_until - current_time)
+                return f"⏳ API quota exceeded. Please try again in {wait_time} seconds."
+            
+            # Check request interval
+            if current_time - self.last_request_time["global"] < self.min_request_interval:
+                await asyncio.sleep(self.min_request_interval)
+            
+            self.last_request_time["global"] = time.time()
+            
             # Handle both text and multimodal prompts
             response = await asyncio.to_thread(
-            gemini_model.generate_content, prompt
-        )
-            if response and hasattr(response, 'text'):
-                return response.text
-            elif response and hasattr(response, 'parts'):
-                return ' '.join(part.text for part in response.parts)
+                self._generate_with_genai, prompt
+            )
+            
+            if response:
+                # Cache successful response
+                self.request_cache[cache_key] = response
+                return response
             else:
                 return "I couldn't process this request properly."
+                
         except Exception as e:
+            error_str = str(e).lower()
+            # Check if it's a quota error
+            if "429" in str(e) or "quota" in error_str:
+                # Extract retry delay if available
+                import re as regex
+                retry_match = regex.search(r'retry.*?(\d+(?:\.\d+)?)', error_str)
+                if retry_match:
+                    retry_seconds = float(retry_match.group(1))
+                    self.quota_exceeded_until = time.time() + retry_seconds + 10
+                else:
+                    self.quota_exceeded_until = time.time() + 60  # Default 60 seconds
+                logger.warning(f"Quota exceeded. Waiting until {self.quota_exceeded_until}")
+                return "⏳ API quota exceeded. Please try again in a moment."
+            
             logger.error(f"Gemini API error: {str(e)}")
             return "I encountered an error processing your request."
+    
+    def _generate_with_genai(self, prompt):
+        """Generate content using google.genai API"""
+        try:
+            response = gemini_client.models.generate_content(
+                model="gemini-2.5-pro",
+                contents=prompt,
+                config={"temperature": self.gemini_config['temperature']}
+            )
+            
+            if response and hasattr(response, 'text'):
+                return response.text
+            elif response and hasattr(response, 'candidates'):
+                if response.candidates:
+                    parts = response.candidates[0].content.parts
+                    return ' '.join(part.text for part in parts if hasattr(part, 'text'))
+            return None
+        except Exception as e:
+            logger.error(f"_generate_with_genai error: {e}")
+            raise
     def clean_response(self, text):
             if not text:
                 return "❌ I couldn't generate a response."
