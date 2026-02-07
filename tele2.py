@@ -460,21 +460,6 @@ class AIBot:
         """
         if not text or not isinstance(text, str):
             return None
-        text_str = text.strip()
-        text_lower = text_str.lower()
-
-        # only treat as puzzle when there's an explicit indicator:
-        # - a '<N> letter' phrase, OR
-        # - a dice emoji + underscores/letters pattern, OR
-        # - underscores present together with a digit (length)
-        has_letter_phrase = bool(re.search(r"(\d+)\s*letter", text_lower))
-        has_dice = '🎲' in text_str
-        has_underscore = '_' in text_str
-        has_digit = bool(re.search(r"\d", text_str))
-
-        if not (has_letter_phrase or (has_dice and has_underscore) or (has_underscore and has_digit)):
-            return None
-
         # look for '<N> letter' and a sequence of letters
         m = re.search(r"(\d+)\s*letter\s*[:\-]?\s*([A-Za-z\s]+)", text, re.IGNORECASE)
         pattern = None
