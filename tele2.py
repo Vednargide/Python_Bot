@@ -450,51 +450,6 @@ class AIBot:
         ]
         return any(keyword.lower() in text.lower() for keyword in keywords)
 
-    def _detect_word_puzzle(self, text):
-        """Detect simple crossword/word-puzzle inputs and extract letters+pattern.
-
-        Expected example formats seen in logs:
-        - "9 letter: t t e l h r a C o"
-        - "🎲 C _ _ r l _ _ _ _"
-        Returns tuple (length, letters_list, pattern) or None.
-        """
-        if not text or not isinstance(text, str):
-            return None
-        # look for '<N> letter' and a sequence of letters
-        m = re.search(r"(\d+)\s*letter\s*[:\-]?\s*([A-Za-z\s]+)", text, re.IGNORECASE)
-        pattern = None
-        letters = None
-        length = None
-        if m:
-            length = int(m.group(1))
-            letters_raw = m.group(2).strip()
-            # split by spaces and remove empties
-            letters = [c for c in re.split(r"\s+", letters_raw) if c]
-        # find pattern line with underscores and letters (e.g., C _ _ r l _ _ _ _)
-        p = re.search(r"([A-Za-z](?:\s*[A-Za-z_]){2,})", text)
-        if p:
-            # normalize multiple spaces
-            pattern = re.sub(r"\s+", " ", p.group(0)).strip()
-        # fallback: if the text contains underscores and spaces, treat as pattern
-        if not pattern and "_" in text:
-            # extract the first line that contains underscores
-            for line in text.splitlines():
-                if "_" in line:
-                    pattern = line.strip()
-                    break
-
-        if length is None:
-            # try to infer length from pattern
-            if pattern:
-                # count letters and underscores separated by spaces or concatenated
-                cleaned = pattern.replace(" ", "")
-                length = len(cleaned)
-
-        if length and (letters or pattern):
-            return (length, letters or [], pattern)
-
-        return None
-
 bot = AIBot()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -668,4 +623,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
