@@ -6,8 +6,32 @@ import time
 from collections import defaultdict
 import google.genai as genai
 from huggingface_hub import InferenceClient
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+try:
+    from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+    from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+except Exception:
+    # Stubs for environments where python-telegram-bot is not installed or incompatible (tests)
+    class Update: pass
+    class InlineKeyboardButton:
+        def __init__(self, *a, **k): pass
+    class InlineKeyboardMarkup:
+        def __init__(self, *a, **k): pass
+    class Application:
+        @staticmethod
+        def builder():
+            class B:
+                def token(self, *a, **k): return self
+                def build(self): return Application()
+            return B()
+    class CommandHandler: pass
+    class MessageHandler: pass
+    class CallbackQueryHandler: pass
+    class filters:
+        TEXT = None
+        PHOTO = None
+        COMMAND = None
+        ChatType = type('CT', (), {'GROUPS': None})
+    class ContextTypes: pass
 from dotenv import load_dotenv
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -408,13 +432,47 @@ class AIBot:
             logger.error(f"Error in clean_response: {str(e)}")
             return "❌ Error formatting response"
 
-    def _is_programming_question(self, text):
+    async def get_response(self, query, chat_id=None):
+        """Main entry to generate a response for a user query.
+
+        - Detects word puzzles and routes them to a concise solver prompt.
+        - Handles programming-question flow (stores question and returns language buttons).
+        - Handles simple math locally.
+        - Otherwise queries Gemini via `get_gemini_response`.
+        """
         try:
-            # Check if it's a programming question
+            # Protect against non-string queries
+            if not isinstance(query, str):
+                return "❌ I can only process text questions."
+
+            # 1) Puzzle detection: if found, ask the model for concise answers only
+            puzzle = self._detect_word_puzzle(query)
+            if puzzle:
+                length, letters, pattern = puzzle
+                letters_str = ' '.join(letters) if letters else 'None'
+                solver_prompt = (
+                    "You are a concise crossword solver.\n"
+                    f"Find {length}-letter English word(s) that match the pattern: {pattern}.\n"
+                    f"Available letters (use each at most as provided): {letters_str}.\n"
+                    "Return ONLY the answer word or a comma-separated list of candidate words with NO explanation."
+                )
+                response = await self.get_gemini_response(solver_prompt)
+                # If the model returns explanatory text, extract candidate words
+                if response and isinstance(response, str):
+                    cleaned = response.strip()
+                    # Prefer returning comma-separated list if present
+                    if ',' in cleaned:
+                        return cleaned
+                    # Otherwise extract word tokens
+                    words = re.findall(r"[A-Za-z]+", cleaned)
+                    if words:
+                        # If model returned multiple words, join with commas
+                        return ','.join(words)
+                    return cleaned
+
+            # 2) Programming question flow
             if chat_id and self._is_programming_question(query):
-                # Store the question
                 self.programming_questions[chat_id] = query
-                # Create language selection buttons
                 keyboard = [[
                     InlineKeyboardButton("🐍 Python", callback_data="lang_python"),
                     InlineKeyboardButton("☕ Java", callback_data="lang_java"),
@@ -425,17 +483,16 @@ class AIBot:
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 return ("Please select the programming language:", reply_markup)
 
-        # Check for simple math
+            # 3) Simple math handled locally
             if re.match(r'^[\d+\-*/().\s]+$', query):
                 result = self.math.solve(query)
                 if result is not None:
                     return f"🔢 Result: {result}"
 
-        # Get Gemini response with error handling
+            # 4) Fallback to Gemini
             response = await self.get_gemini_response(query)
             if not response:
                 return "❌ I couldn't generate a response. Please try again."
-            
             return self.clean_response(response)
 
         except Exception as e:
@@ -449,6 +506,106 @@ class AIBot:
             'Input:', 'Output:', 'Example', 'return'
         ]
         return any(keyword.lower() in text.lower() for keyword in keywords)
+
+    def _detect_word_puzzle(self, text):
+        """Detect simple crossword/word-puzzle inputs and extract letters+pattern.
+
+        Expected example formats seen in logs:
+        - "9 letter: t t e l h r a C o"
+        - "🎲 C _ _ r l _ _ _ _"
+        Returns tuple (length, letters_list, pattern) or None.
+        """
+        if not text or not isinstance(text, str):
+            return None
+        text_str = text.strip()
+        text_lower = text_str.lower()
+
+        # only treat as puzzle when there's an explicit indicator:
+        # - a '<N> letter' phrase, OR
+        # - a dice emoji + underscores/letters pattern, OR
+        # - underscores present together with a digit (length), OR
+        # - a Wordle-style colored grid using 🟥/🟨/🟩 emojis
+        has_letter_phrase = bool(re.search(r"(\d+)\s*letter", text_lower))
+        has_dice = '🎲' in text_str
+        has_underscore = '_' in text_str
+        has_digit = bool(re.search(r"\d", text_str))
+        has_colored_squares = any(e in text_str for e in ('🟥','🟨','🟩'))
+
+        if not (has_letter_phrase or (has_dice and has_underscore) or (has_underscore and has_digit) or has_colored_squares):
+            return None
+
+        # look for '<N> letter' and a sequence of letters
+        m = re.search(r"(\d+)\s*letter\s*[:\-]?\s*([A-Za-z\s]+)", text, re.IGNORECASE)
+        pattern = None
+        letters = None
+        length = None
+        if m:
+            length = int(m.group(1))
+            letters_raw = m.group(2).strip()
+            # split by spaces and remove empties
+            letters = [c for c in re.split(r"\s+", letters_raw) if c]
+        # find pattern line with underscores and letters (e.g., C _ _ r l _ _ _ _)
+        p = re.search(r"([A-Za-z](?:\s*[A-Za-z_]){2,})", text)
+        if p:
+            # normalize multiple spaces
+            pattern = re.sub(r"\s+", " ", p.group(0)).strip()
+        # fallback: if the text contains underscores and spaces, treat as pattern
+        if not pattern and "_" in text:
+            # extract the first line that contains underscores
+            for line in text.splitlines():
+                if "_" in line:
+                    pattern = line.strip()
+                    break
+
+        if length is None:
+            # try to infer length from pattern
+            if pattern:
+                # count letters and underscores separated by spaces or concatenated
+                cleaned = pattern.replace(" ", "")
+                length = len(cleaned)
+
+        if length and (letters or pattern):
+            return (length, letters or [], pattern)
+        # If colored squares present, try to parse Wordle-style grid
+        if has_colored_squares:
+            greens = [None]*5
+            yellows = []  # list of (letter, not_pos)
+            forbidden = set()
+            # parse lines: look for sequences like '🟥 🟥 🟥 🟥 🟥 𝗬𝗜𝗘𝗟𝗗'
+            for line in text.splitlines():
+                if any(e in line for e in ('🟥','🟨','🟩')):
+                    parts = line.strip().split()
+                    # find last token that's alphabetic as the guessed word
+                    word = None
+                    for token in reversed(parts):
+                        if re.fullmatch(r"[A-Za-z]+", token):
+                            word = token.upper()
+                            break
+                    if not word or len(word) != 5:
+                        continue
+                    # now collect the first five emojis in the line
+                    emojis = [t for t in parts if t in ('🟥','🟨','🟩')]
+                    if len(emojis) < 5:
+                        # maybe emojis separated by spaces with other tokens; try first five tokens
+                        emojis = parts[:5]
+                    if len(emojis) < 5:
+                        continue
+                    for i, em in enumerate(emojis[:5]):
+                        ch = word[i]
+                        if em == '🟩':
+                            greens[i] = ch
+                        elif em == '🟨':
+                            yellows.append((ch, i))
+                        elif em == '🟥':
+                            forbidden.add(ch)
+            # Build a simple pattern string from greens/underscores
+            pattern_str = ''.join(g if g else '_' for g in greens)
+            # Combine letters from yellows for available letters
+            letters_list = [y[0] for y in yellows]
+            # return as puzzle tuple: (length, letters, pattern)
+            return (5, letters_list, pattern_str)
+
+        return None
 
 bot = AIBot()
 
