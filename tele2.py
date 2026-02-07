@@ -251,27 +251,43 @@ class AIBot:
                 
         except Exception as e:
             error_str = str(e).lower()
-            # Check if it's a quota error
-            if "429" in str(e) or "quota" in error_str:
+            logger.error(f"Gemini API error: {str(e)}")
+            
+            # Check if it's a quota error (429)
+            if "429" in str(e) or "quota" in error_str or "resource_exhausted" in error_str:
                 # Extract retry delay if available
                 import re as regex
                 retry_match = regex.search(r'retry.*?(\d+(?:\.\d+)?)', error_str)
                 if retry_match:
                     retry_seconds = float(retry_match.group(1))
                     self.quota_exceeded_until = time.time() + retry_seconds + 10
+                    logger.warning(f"Quota exceeded. Waiting {retry_seconds} seconds")
+                    return f"⏳ API quota exceeded. Waiting {int(retry_seconds)} seconds before retry..."
                 else:
-                    self.quota_exceeded_until = time.time() + 60  # Default 60 seconds
-                logger.warning(f"Quota exceeded. Waiting until {self.quota_exceeded_until}")
-                return "⏳ API quota exceeded. Please try again in a moment."
+                    self.quota_exceeded_until = time.time() + 3600  # Wait 1 hour
+                    logger.warning(f"Quota exceeded. Waiting 1 hour")
+                    return "⏳ API quota limit reached. Please try again later (quota resets every 24 hours)."
             
-            logger.error(f"Gemini API error: {str(e)}")
-            return "I encountered an error processing your request."
+            # Check for authentication errors (401)
+            elif "401" in str(e) or "unauthenticated" in error_str or "invalid" in error_str:
+                logger.error("API key authentication failed")
+                return "❌ Authentication error with API key. Please check your configuration."
+            
+            # Check for model not found (404)
+            elif "404" in str(e) or "not found" in error_str:
+                logger.error("Model not found")
+                return "❌ Model not available. The AI model may be temporarily unavailable."
+            
+            # Generic error
+            else:
+                return f"❌ Error: {str(e)[:100]}"
     
     def _generate_with_genai(self, prompt):
         """Generate content using google.genai API"""
         try:
+            # Use gemini-2.5-flash (verified working)
             response = gemini_client.models.generate_content(
-                model="gemini-2.5-pro",
+                model="gemini-2.5-flash",
                 contents=prompt
             )
             
@@ -286,15 +302,22 @@ class AIBot:
         except Exception as e:
             logger.error(f"_generate_with_genai error: {e}")
             raise
+    
     def clean_response(self, text):
-            if not text:
-                return "❌ I couldn't generate a response."
+        """Clean and format response with proper error handling"""
+        if not text:
+            return "❌ I couldn't generate a response."
         
-            
-        
+        try:
+            # Remove any problematic characters
+            text = str(text).replace('_', '\\_').replace('*', '\\*').replace('`', '\\`')
+            # Remove excessive newlines
+            text = re.sub(r'\n{3,}', '\n\n', text)
+            # Add emoji prefix
             return "💡 " + text.strip()
-
-    def _is_programming_question(self, text):
+        except Exception as e:
+            logger.error(f"Error in clean_response: {str(e)}")
+            return "❌ Error formatting response"
         keywords = [
             'program', 'code', 'function', 'algorithm',
             'write a', 'implement', 'create a program', 'Constraints:',
@@ -336,19 +359,13 @@ class AIBot:
             logger.error(f"Error in get_response: {str(e)}")
             return "❌ I encountered an error. Please try rephrasing your question."
 
-
-    
-        try:
-        # Remove any problematic characters
-            text = str(text).replace('_', '\\_').replace('*', '\\*').replace('`', '\\`')
-        # Remove excessive newlines
-            text = re.sub(r'\n{3,}', '\n\n', text)
-        # Add emoji prefix
-            return "💡 " + text.strip()
-        except Exception as e:
-            logger.error(f"Error in clean_response: {str(e)}")
-            return "❌ Error formatting response"
-        
+    def _is_programming_question(self, text):
+        keywords = [
+            'program', 'code', 'function', 'algorithm',
+            'write a', 'implement', 'create a program', 'Constraints:',
+            'Input:', 'Output:', 'Example', 'return'
+        ]
+        return any(keyword.lower() in text.lower() for keyword in keywords)
 
 bot = AIBot()
 
