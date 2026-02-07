@@ -27,7 +27,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
 
-genai.configure(api_key=GEMINI_API_KEY)
+# Initialize clients - google.genai uses API key directly in Client()
 gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 hf_client = InferenceClient(token=HUGGINGFACE_API_KEY)
 
@@ -272,15 +272,15 @@ class AIBot:
         try:
             response = gemini_client.models.generate_content(
                 model="gemini-2.5-pro",
-                contents=prompt,
-                config={"temperature": self.gemini_config['temperature']}
+                contents=prompt
             )
             
             if response and hasattr(response, 'text'):
                 return response.text
-            elif response and hasattr(response, 'candidates'):
-                if response.candidates:
-                    parts = response.candidates[0].content.parts
+            elif response and hasattr(response, 'candidates') and response.candidates:
+                candidate = response.candidates[0]
+                if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
+                    parts = candidate.content.parts
                     return ' '.join(part.text for part in parts if hasattr(part, 'text'))
             return None
         except Exception as e:
