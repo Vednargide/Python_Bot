@@ -6,32 +6,8 @@ import time
 from collections import defaultdict
 import google.genai as genai
 from huggingface_hub import InferenceClient
-try:
-    from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-    from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
-except Exception:
-    # Stubs for environments where python-telegram-bot is not installed or incompatible (tests)
-    class Update: pass
-    class InlineKeyboardButton:
-        def __init__(self, *a, **k): pass
-    class InlineKeyboardMarkup:
-        def __init__(self, *a, **k): pass
-    class Application:
-        @staticmethod
-        def builder():
-            class B:
-                def token(self, *a, **k): return self
-                def build(self): return Application()
-            return B()
-    class CommandHandler: pass
-    class MessageHandler: pass
-    class CallbackQueryHandler: pass
-    class filters:
-        TEXT = None
-        PHOTO = None
-        COMMAND = None
-        ChatType = type('CT', (), {'GROUPS': None})
-    class ContextTypes: pass
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from dotenv import load_dotenv
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -452,18 +428,22 @@ class AIBot:
                 letters_str = ' '.join(letters) if letters else 'None'
                 solver_prompt = (
                     "You are a concise crossword solver.\n"
-                    f"Find the single best {length}-letter English word that matches the pattern: {pattern}.\n"
+                    f"Find {length}-letter English word(s) that match the pattern: {pattern}.\n"
                     f"Available letters (use each at most as provided): {letters_str}.\n"
-                    "Return ONLY the single best answer word with NO explanation."
+                    "Return ONLY the answer word or a comma-separated list of candidate words with NO explanation."
                 )
                 response = await self.get_gemini_response(solver_prompt)
-                # If the model returns text, extract the first candidate word and return it
+                # If the model returns explanatory text, extract candidate words
                 if response and isinstance(response, str):
                     cleaned = response.strip()
-                    # extract first contiguous word token
-                    m = re.search(r"[A-Za-z]+", cleaned)
-                    if m:
-                        return m.group(0).upper()
+                    # Prefer returning comma-separated list if present
+                    if ',' in cleaned:
+                        return cleaned
+                    # Otherwise extract word tokens
+                    words = re.findall(r"[A-Za-z]+", cleaned)
+                    if words:
+                        # If model returned multiple words, join with commas
+                        return ','.join(words)
                     return cleaned
 
             # 2) Programming question flow
