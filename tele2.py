@@ -189,14 +189,8 @@ class AIBot:
     async def analyze_image(self, image_file):
         """Analyze image content and provide a solution"""
         try:
-            # Create image part for Gemini
+            # Read image bytes
             image_bytes = image_file.read()
-            image_parts = [
-                {
-                    "mime_type": "image/jpeg",
-                    "data": image_bytes
-                }
-            ]
             
             prompt = """Analyze this image carefully. If it contains:
             - Text: Extract and read all text
@@ -206,16 +200,87 @@ class AIBot:
             
             Format your response clearly and provide detailed explanations."""
             
-            # Get response from Gemini
-            response = await self.get_gemini_response([prompt, *image_parts])
-            if not response:
-                return "❌ I couldn't analyze this image. Please try with a clearer image."
+            # Get response from Gemini with image
+            response = await asyncio.to_thread(
+                self._analyze_image_with_genai, image_bytes, prompt
+            )
             
-            return self.clean_response(response)
+            if response:
+                return self.clean_response(response)
+            else:
+                return "❌ I couldn't analyze this image. Please try with a clearer image."
             
         except Exception as e:
             logger.error(f"Error analyzing image: {e}")
             return "❌ I encountered an error analyzing this image. Please try again with a clearer image."
+    
+    def _analyze_image_with_genai(self, image_bytes, prompt):
+        """Analyze image using google.genai API with fallback"""
+        try:
+            import base64
+            # Encode image as base64
+            image_base64 = base64.standard_b64encode(image_bytes).decode("utf-8")
+            
+            # Create image part for the API
+            image_part = {
+                "mime_type": "image/jpeg",
+                "data": image_base64
+            }
+            
+            # Try gemini-2.5-pro first
+            logger.info("Attempting image analysis with gemini-2.5-pro...")
+            response = gemini_client.models.generate_content(
+                model="gemini-2.5-pro",
+                contents=[
+                    prompt,
+                    image_part
+                ]
+            )
+            
+            if response and hasattr(response, 'text'):
+                return response.text
+            elif response and hasattr(response, 'candidates') and response.candidates:
+                candidate = response.candidates[0]
+                if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
+                    parts = candidate.content.parts
+                    return ' '.join(part.text for part in parts if hasattr(part, 'text'))
+            return None
+            
+        except Exception as e:
+            error_str = str(e).lower()
+            # If quota exceeded with pro, fall back to flash
+            if "429" in str(e) or "quota" in error_str or "resource_exhausted" in error_str:
+                logger.warning(f"gemini-2.5-pro image quota exceeded, falling back to gemini-2.5-flash")
+                try:
+                    import base64
+                    image_base64 = base64.standard_b64encode(image_bytes).decode("utf-8")
+                    image_part = {
+                        "mime_type": "image/jpeg",
+                        "data": image_base64
+                    }
+                    
+                    response = gemini_client.models.generate_content(
+                        model="gemini-2.5-flash",
+                        contents=[
+                            prompt,
+                            image_part
+                        ]
+                    )
+                    
+                    if response and hasattr(response, 'text'):
+                        return response.text
+                    elif response and hasattr(response, 'candidates') and response.candidates:
+                        candidate = response.candidates[0]
+                        if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
+                            parts = candidate.content.parts
+                            return ' '.join(part.text for part in parts if hasattr(part, 'text'))
+                    return None
+                except Exception as flash_error:
+                    logger.error(f"gemini-2.5-flash image analysis also failed: {flash_error}")
+                    raise flash_error
+            else:
+                logger.error(f"_analyze_image_with_genai error: {e}")
+                raise
 
     async def get_gemini_response(self, prompt):
         try:
@@ -283,11 +348,12 @@ class AIBot:
                 return f"❌ Error: {str(e)[:100]}"
     
     def _generate_with_genai(self, prompt):
-        """Generate content using google.genai API"""
+        """Generate content using google.genai API with fallback"""
         try:
-            # Use gemini-2.5-flash (verified working)
+            # Try gemini-2.5-pro first
+            logger.info("Attempting with gemini-2.5-pro...")
             response = gemini_client.models.generate_content(
-                model="gemini-2.5-flash",
+                model="gemini-2.5-pro",
                 contents=prompt
             )
             
@@ -299,9 +365,32 @@ class AIBot:
                     parts = candidate.content.parts
                     return ' '.join(part.text for part in parts if hasattr(part, 'text'))
             return None
+            
         except Exception as e:
-            logger.error(f"_generate_with_genai error: {e}")
-            raise
+            error_str = str(e).lower()
+            # If quota exceeded with pro, fall back to flash
+            if "429" in str(e) or "quota" in error_str or "resource_exhausted" in error_str:
+                logger.warning(f"gemini-2.5-pro quota exceeded, falling back to gemini-2.5-flash")
+                try:
+                    response = gemini_client.models.generate_content(
+                        model="gemini-2.5-flash",
+                        contents=prompt
+                    )
+                    
+                    if response and hasattr(response, 'text'):
+                        return response.text
+                    elif response and hasattr(response, 'candidates') and response.candidates:
+                        candidate = response.candidates[0]
+                        if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
+                            parts = candidate.content.parts
+                            return ' '.join(part.text for part in parts if hasattr(part, 'text'))
+                    return None
+                except Exception as flash_error:
+                    logger.error(f"gemini-2.5-flash also failed: {flash_error}")
+                    raise flash_error
+            else:
+                logger.error(f"_generate_with_genai error: {e}")
+                raise
     
     def clean_response(self, text):
         """Clean and format response with proper error handling"""
@@ -318,15 +407,30 @@ class AIBot:
         except Exception as e:
             logger.error(f"Error in clean_response: {str(e)}")
             return "❌ Error formatting response"
-        keywords = [
-            'program', 'code', 'function', 'algorithm',
-            'write a', 'implement', 'create a program', 'Constraints:',
-            'Input:', 'Output:', 'Example', 'return'  # Add these keywords
-        ]
-        return any(keyword.lower() in text.lower() for keyword in keywords)
 
     async def get_response(self, query, chat_id=None):
         try:
+            # Detect word-puzzle inputs first (e.g., "9 letter: t t e l h r a C o" + pattern)
+            puzzle = self._detect_word_puzzle(query)
+            if puzzle:
+                length, letters, pattern = puzzle
+                letters_str = ' '.join(letters) if letters else ''
+                solver_prompt = (
+                    "You are a concise crossword solver.\n"
+                    f"Find {length}-letter English word(s) that match the pattern: {pattern}.\n"
+                    f"Available letters (use each at most as provided): {letters_str}.\n"
+                    "Return only the answer word or a comma-separated list of candidate words with no additional commentary."
+                )
+                response = await self.get_gemini_response(solver_prompt)
+                if response and not response.startswith("⏳"):
+                    cleaned = response.strip()
+                    if ',' in cleaned:
+                        return cleaned
+                    words = re.findall(r"[A-Za-z]+", cleaned)
+                    if words:
+                        return ' '.join(words)
+                return response
+
             # Check if it's a programming question
             if chat_id and self._is_programming_question(query):
                 # Store the question
@@ -342,13 +446,13 @@ class AIBot:
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 return ("Please select the programming language:", reply_markup)
 
-        # Check for simple math
+            # Check for simple math
             if re.match(r'^[\d+\-*/().\s]+$', query):
                 result = self.math.solve(query)
                 if result is not None:
                     return f"🔢 Result: {result}"
 
-        # Get Gemini response with error handling
+            # Get Gemini response with error handling
             response = await self.get_gemini_response(query)
             if not response:
                 return "❌ I couldn't generate a response. Please try again."
@@ -366,6 +470,51 @@ class AIBot:
             'Input:', 'Output:', 'Example', 'return'
         ]
         return any(keyword.lower() in text.lower() for keyword in keywords)
+
+    def _detect_word_puzzle(self, text):
+        """Detect simple crossword/word-puzzle inputs and extract letters+pattern.
+
+        Expected example formats seen in logs:
+        - "9 letter: t t e l h r a C o"
+        - "🎲 C _ _ r l _ _ _ _"
+        Returns tuple (length, letters_list, pattern) or None.
+        """
+        if not text or not isinstance(text, str):
+            return None
+        # look for '<N> letter' and a sequence of letters
+        m = re.search(r"(\d+)\s*letter\s*[:\-]?\s*([A-Za-z\s]+)", text, re.IGNORECASE)
+        pattern = None
+        letters = None
+        length = None
+        if m:
+            length = int(m.group(1))
+            letters_raw = m.group(2).strip()
+            # split by spaces and remove empties
+            letters = [c for c in re.split(r"\s+", letters_raw) if c]
+        # find pattern line with underscores and letters (e.g., C _ _ r l _ _ _ _)
+        p = re.search(r"([A-Za-z](?:\s*[A-Za-z_]){2,})", text)
+        if p:
+            # normalize multiple spaces
+            pattern = re.sub(r"\s+", " ", p.group(0)).strip()
+        # fallback: if the text contains underscores and spaces, treat as pattern
+        if not pattern and "_" in text:
+            # extract the first line that contains underscores
+            for line in text.splitlines():
+                if "_" in line:
+                    pattern = line.strip()
+                    break
+
+        if length is None:
+            # try to infer length from pattern
+            if pattern:
+                # count letters and underscores separated by spaces or concatenated
+                cleaned = pattern.replace(" ", "")
+                length = len(cleaned)
+
+        if length and (letters or pattern):
+            return (length, letters or [], pattern)
+
+        return None
 
 bot = AIBot()
 
@@ -540,3 +689,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
