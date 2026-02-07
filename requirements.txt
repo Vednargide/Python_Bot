@@ -1,0 +1,6 @@
+python-telegram-bot==20.5
+google-generativeai
+huggingface_hub
+python-dotenv
+Pillow
+pytesseract
