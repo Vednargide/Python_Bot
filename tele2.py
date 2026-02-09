@@ -186,7 +186,7 @@ class AIBot:
             return False
         return chat_id in self.allowed_group_ids and self.is_active  # Modify this line
 
-    async def analyze_image(self, image_file):
+    async def analyze_image(self, image_file, prompt_text=None):
         """Analyze image content and provide a solution"""
         try:
             # Create image part for Gemini
@@ -203,8 +203,12 @@ class AIBot:
             - Math problems: Provide step-by-step solutions
             - Code: Explain the code and suggest improvements
             - Questions: Provide detailed answers
+            - Reasoning/Logical Problems: Solve them and provide the correct option.
             
             Format your response clearly and provide detailed explanations."""
+            
+            if prompt_text:
+                prompt += f"\n\nAdditional Context/Caption from User:\n{prompt_text}"
             
             # Get response from Gemini
             response = await self.get_gemini_response([prompt, *image_parts])
@@ -288,7 +292,7 @@ class AIBot:
             # Use gemini-2.5-flash (verified working)
             # Add system instruction
             config = genai.types.GenerateContentConfig(
-                system_instruction="You are a helpful AI assistant. You are capable of solving math problems, aptitude questions, and programming tasks. When a user sends a problem, SOLVE IT directly. Do not just acknowledge the problem or ask for more info unless absolutely necessary. Provide step-by-step solutions.",
+                system_instruction="You are a helpful AI assistant. You are capable of solving math problems, aptitude questions, and programming tasks. When a user sends a problem, SOLVE IT directly. If the user provides a statement followed by conclusions, analyze them and decide which conclusion follows (Result: A, B, C, D, or E). Do not ask for the statement if it is present in the context or image.",
                 temperature=0.3,
             )
             
@@ -476,10 +480,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not await bot.should_respond(chat_id, message_text):
             return
 
-        logger.info(f"Received message from {chat_id}: {message_text}")
+        # Check for reply context
+        context_text = ""
+        if update.message.reply_to_message:
+            reply = update.message.reply_to_message
+            if reply.text:
+                context_text = f"Context from previous message:\n{reply.text}\n\n"
+            elif reply.caption:
+                context_text = f"Context from previous message:\n{reply.caption}\n\n"
+        
+        full_query = context_text + message_text
+        logger.info(f"Received message from {chat_id}: {full_query}")
 
         await context.bot.send_chat_action(chat_id=chat_id, action="typing")
-        response = await bot.get_response(message_text, chat_id)
+        response = await bot.get_response(full_query, chat_id)
         
         # Check if response is a tuple (for programming questions)
         if isinstance(response, tuple):
@@ -518,9 +532,12 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await photo_file.download_to_memory(photo_bytes)
         photo_bytes.seek(0)
         
+        
         # Analyze the image
         await update.message.reply_text("🔍 Analyzing your image... This may take a moment.")
-        response = await bot.analyze_image(photo_bytes)
+        
+        caption = update.message.caption
+        response = await bot.analyze_image(photo_bytes, caption)
         
         # Send response (handle long responses)
         if len(response) <= 4096:
