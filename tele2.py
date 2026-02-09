@@ -338,29 +338,29 @@ class AIBot:
         except Exception as e:
             logger.error(f"Error in clean_response: {str(e)}")
             return "❌ Error formatting response"
-        # keywords = [
-        #     'program', 'code', 'function', 'algorithm',
-        #     'write a', 'implement', 'create a program', 'Constraints:',
-        #     'Input:', 'Output:', 'Example', 'return'  # Add these keywords
-        # ]
+        keywords = [
+            'program', 'code', 'function', 'algorithm',
+            'write a', 'implement', 'create a program', 'Constraints:',
+            'Input:', 'Output:', 'Example', 'return'  # Add these keywords
+        ]
         return any(keyword.lower() in text.lower() for keyword in keywords)
 
     async def get_response(self, query, chat_id=None):
         try:
             # Check if it's a programming question
-            # if chat_id and self._is_programming_question(query):
-            #     # Store the question
-            #     self.programming_questions[chat_id] = query
-            #     # Create language selection buttons
-            #     keyboard = [[
-            #         InlineKeyboardButton("🐍 Python", callback_data="lang_python"),
-            #         InlineKeyboardButton("☕ Java", callback_data="lang_java"),
-            #     ], [
-            #         InlineKeyboardButton("⚡ C++", callback_data="lang_cpp"),
-            #         InlineKeyboardButton("💛 JavaScript", callback_data="lang_javascript")
-            #     ]]
-            #     reply_markup = InlineKeyboardMarkup(keyboard)
-            #     return ("Please select the programming language:", reply_markup)
+            if chat_id and self._is_programming_question(query):
+                # Store the question
+                self.programming_questions[chat_id] = query
+                # Create language selection buttons
+                keyboard = [[
+                    InlineKeyboardButton("🐍 Python", callback_data="lang_python"),
+                    InlineKeyboardButton("☕ Java", callback_data="lang_java"),
+                ], [
+                    InlineKeyboardButton("⚡ C++", callback_data="lang_cpp"),
+                    InlineKeyboardButton("💛 JavaScript", callback_data="lang_javascript")
+                ]]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                return ("Please select the programming language:", reply_markup)
 
         # Check for simple math
             if re.match(r'^[\d+\-*/().\s]+$', query):
@@ -381,9 +381,9 @@ class AIBot:
 
     def _is_programming_question(self, text):
         keywords = [
-            'program', 'code', 'function', 'algorithm',
-            'write a', 'implement', 'create a program', 'Constraints:',
-            'Input:', 'Output:', 'Example', 'return'
+            # 'program', 'code', 'function', 'algorithm',
+            # 'write a', 'implement', 'create a program', 'Constraints:',
+            # 'Input:', 'Output:', 'Example', 'return'
         ]
         return any(keyword.lower() in text.lower() for keyword in keywords)
 
@@ -449,9 +449,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             language = query.data.split("_")[1]
             chat_id = query.message.chat_id
             
-            # if chat_id in bot.programming_questions:
-            #     question = bot.programming_questions[chat_id]
-            #     prompt = f"""Write a solution in {language} for the following problem:
+            if chat_id in bot.programming_questions:
+                question = bot.programming_questions[chat_id]
+                prompt = f"""Write a solution in {language} for the following problem:
                 
 {question}
 
