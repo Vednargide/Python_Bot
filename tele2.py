@@ -338,11 +338,11 @@ class AIBot:
         except Exception as e:
             logger.error(f"Error in clean_response: {str(e)}")
             return "❌ Error formatting response"
-        keywords = [
-            'program', 'code', 'function', 'algorithm',
-            'write a', 'implement', 'create a program', 'Constraints:',
-            'Input:', 'Output:', 'Example', 'return'  # Add these keywords
-        ]
+        # keywords = [
+        #     'program', 'code', 'function', 'algorithm',
+        #     'write a', 'implement', 'create a program', 'Constraints:',
+        #     'Input:', 'Output:', 'Example', 'return'  # Add these keywords
+        # ]
         return any(keyword.lower() in text.lower() for keyword in keywords)
 
     async def get_response(self, query, chat_id=None):
