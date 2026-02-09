@@ -286,18 +286,34 @@ class AIBot:
         """Generate content using google.genai API"""
         try:
             # Use gemini-2.5-flash (verified working)
-            response = gemini_client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt
+            # Add system instruction
+            config = genai.types.GenerateContentConfig(
+                system_instruction="You are a helpful AI assistant. You are capable of solving math problems, aptitude questions, and programming tasks. When a user sends a problem, SOLVE IT directly. Do not just acknowledge the problem or ask for more info unless absolutely necessary. Provide step-by-step solutions.",
+                temperature=0.3,
             )
             
+            logger.info(f"Generating content with model: gemini-2.5-flash")
+            response = gemini_client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt,
+                config=config
+            )
+            
+            logger.info("Successfully received response from Gemini")
+
+            
+            logger.info("Successfully received response from Gemini")
+
             if response and hasattr(response, 'text'):
+                logger.info(f"Response text: {response.text[:200]}...") # Log first 200 chars
                 return response.text
             elif response and hasattr(response, 'candidates') and response.candidates:
                 candidate = response.candidates[0]
                 if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
                     parts = candidate.content.parts
-                    return ' '.join(part.text for part in parts if hasattr(part, 'text'))
+                    text = ' '.join(part.text for part in parts if hasattr(part, 'text'))
+                    logger.info(f"Response text (from parts): {text[:200]}...")
+                    return text
             return None
         except Exception as e:
             logger.error(f"_generate_with_genai error: {e}")
@@ -460,6 +476,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not await bot.should_respond(chat_id, message_text):
             return
 
+        logger.info(f"Received message from {chat_id}: {message_text}")
+
         await context.bot.send_chat_action(chat_id=chat_id, action="typing")
         response = await bot.get_response(message_text, chat_id)
         
@@ -540,4 +558,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
